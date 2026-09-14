@@ -8,6 +8,9 @@ Everything runs locally except two API calls (entity extraction and embeddings).
 No framework, no ORM, no vector database — Python 3.14 standard library, one
 SQLite file, 27 MB.
 
+**[Interactive 3D graph →](https://aditya-20121.github.io/claude-memory-graph/)**
+(entity names limited to public tools; private ones masked)
+
 **Headline result, in two parts.**
 
 The hybrid retrieval this project set out to build — fixed-weight RRF over vector
@@ -57,7 +60,8 @@ python embed_entities.py      # entity vectors (≈25 min)
 python retrieve.py "what blocked the model eval?"           # auto mode
 python evaluate.py --ablate                              # per-set tables
 python benchmark_all.py                                  # the combined table above
-python visualize.py                                      # interactive graph -> graph.html
+python visualize.py                                      # 3D graph, full names -> graph.html
+python visualize.py --publish                            # masked names -> docs/index.html
 ```
 
 Every module has a runnable self-check with no framework or fixtures:

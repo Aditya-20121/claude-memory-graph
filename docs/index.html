@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>claude-memory-graph</title>
+<meta name="description" content="A knowledge graph built from my own Claude Code history. Routing between graph and vector retrieval beats fusing them.">
+<style>
+  :root{--bg:#090c12;--panel:#11161f;--line:#232b38;--fg:#e8eef6;--dim:#8b98ab;--acc:#58a6ff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--fg);
+    font:13px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  #app{display:flex;height:100%}
+  #stage{flex:1 1 0;min-width:0;position:relative}
+  canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab}
+  canvas.drag{cursor:grabbing}
+  aside{width:340px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow:hidden}
+  .scroll{overflow-y:auto;padding:20px}
+  h1{font-size:16px;letter-spacing:-.02em;font-weight:650}
+  h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+    font-weight:600;margin-bottom:9px}
+  .sub{color:var(--dim);font-size:12px;margin-top:3px}
+  .sec{border-top:1px solid var(--line);margin-top:18px;padding-top:16px}
+  input{width:100%;background:#090c12;border:1px solid var(--line);color:var(--fg);
+    border-radius:7px;padding:7px 10px;font-size:12px;font-family:inherit}
+  input:focus{outline:none;border-color:var(--acc)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:flex;align-items:center;gap:6px;padding:4px 9px;border:1px solid var(--line);
+    border-radius:99px;cursor:pointer;font-size:11px;user-select:none;transition:opacity .12s}
+  .chip.off{opacity:.3}
+  .dot{width:8px;height:8px;border-radius:50%;flex:none}
+  .row{display:flex;justify-content:space-between;padding:3px 0;font-variant-numeric:tabular-nums}
+  .row span:last-child{color:var(--dim)}
+  .name{font-size:16px;font-weight:650;word-break:break-word;letter-spacing:-.01em}
+  .edge{padding:6px 0;border-bottom:1px solid #1a212c;font-size:12px}
+  .edge em{color:var(--acc);font-style:normal}
+  .edge small{color:var(--dim);font-size:10.5px;display:block}
+  .hint{color:var(--dim);font-size:11.5px}
+  button{background:#1a212c;border:1px solid var(--line);color:var(--fg);border-radius:7px;
+    padding:6px 11px;font-size:11.5px;cursor:pointer;font-family:inherit}
+  button:hover{background:#232b38}
+  a{color:var(--acc);text-decoration:none}
+  a:hover{text-decoration:underline}
+  #about{position:absolute;inset:0;background:rgba(9,12,18,.97);overflow-y:auto;
+    padding:40px;display:none;z-index:10}
+  #about.on{display:block}
+  .doc{max-width:660px;margin:0 auto}
+  .doc h3{font-size:22px;letter-spacing:-.02em;margin-bottom:6px}
+  .doc p{margin:12px 0;color:#c3cede}
+  .doc ol{margin:12px 0 12px 20px}
+  .doc li{margin:7px 0;color:#c3cede}
+  .doc code{background:#11161f;border:1px solid var(--line);border-radius:4px;
+    padding:1px 5px;font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .doc table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12.5px;
+    font-variant-numeric:tabular-nums}
+  .doc th,.doc td{padding:6px 9px;border-bottom:1px solid var(--line);text-align:right}
+  .doc th:first-child,.doc td:first-child{text-align:left}
+  .doc th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;
+    letter-spacing:.05em}
+  .win{background:rgba(88,166,255,.10)}
+  .kicker{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.09em}
+  .close{position:absolute;top:22px;right:26px}
+  .note{border-left:2px solid var(--line);padding-left:14px;color:var(--dim);font-size:12.5px}
+  @media(max-width:860px){aside{width:min(88vw,340px);position:absolute;right:0;top:0;bottom:0}
+    #about{padding:24px 18px}}
+</style></head><body>
+<div id="app">
+  <div id="stage"><canvas id="cv"></canvas>
+    <div id="about"><button class="close" id="x">close</button><div class="doc">
+<div class="kicker">Personal project</div>
+<h3>claude-memory-graph</h3>
+<p><strong>The problem.</strong> Claude has no memory between sessions. Months of my
+own engineering conversations sit in local transcript files, and nothing can
+query them.</p>
+
+<p><strong>What you are looking at.</strong> Every dot is an entity pulled out of my own
+Claude Code history &mdash; a tool, a file, a concept, a problem, a decision. Every
+line is a relationship between two of them. Roughly four months of work, as a graph.</p>
+
+<ol>
+  <li><strong>Ingest</strong> &mdash; parse local transcripts into a normalised store.
+      One chunk = one exchange. 25 sessions &rarr; 411 chunks.</li>
+  <li><strong>Knowledge graph</strong> &mdash; an LLM extracts
+      <code>(entity, relation, entity)</code> triples against a <em>closed</em>
+      vocabulary of 7 entity kinds and 11 predicates; anything outside it is
+      dropped rather than stored. Further edges come straight from tool calls, so
+      they cannot be hallucinated. 2,579 entities, 2,895 relations.</li>
+  <li><strong>Vector index</strong> &mdash; embed every chunk; cosine search in pure
+      Python, no vector database.</li>
+  <li><strong>MCP server</strong> &mdash; three tools, so Claude can query all of it
+      mid-conversation.</li>
+</ol>
+
+<p><strong>The result was not the one I set out to prove.</strong> The plan was to show
+that hybrid retrieval &mdash; fusing graph and vector search &mdash; beats plain
+vector search. I built two evaluation sets with deliberately <em>opposite</em>
+biases so neither could flatter the architecture, and measured it.</p>
+
+<p>Hybrid lost to both of its own inputs.</p>
+
+<table>
+  <tr><th>mode</th><th>single-hop</th><th>cross-session</th><th>overall</th></tr>
+  <tr><td>vector only</td><td>0.576</td><td>0.074</td><td>0.353</td></tr>
+  <tr><td>graph only</td><td>0.191</td><td>0.420</td><td>0.293</td></tr>
+  <tr><td>hybrid (fixed fusion)</td><td>0.349</td><td>0.234</td><td>0.298</td></tr>
+  <tr class="win"><td><strong>adaptive routing</strong></td><td>0.538</td><td>0.313</td>
+      <td><strong>0.438</strong></td></tr>
+</table>
+<p class="hint" style="margin-top:-6px">Mean reciprocal rank over 45 questions.
+Higher is better.</p>
+
+<p>The two retrievers turned out to be <em>complementary rather than additive</em>:
+vector search is ~8&times; better at &ldquo;what did this conversation say&rdquo;,
+the graph ~5&times; better at &ldquo;where else did this come up&rdquo;. Blending
+them at a fixed ratio is worse than picking one.</p>
+
+<p>So I replaced fusion with <strong>routing</strong>: let vector search's own
+confidence decide how much graph to mix in. When nothing in the corpus closely
+matches the query, the answer is more likely <em>reachable</em> than
+<em>stateable</em> &mdash; so lean on the graph. That is <strong>+24%
+overall</strong> against the best fixed strategy, and it matches the graph's
+cross-session recall while keeping the vector's.</p>
+
+<p class="note">Reported honestly: the routing thresholds are tuned on the same 45
+questions they are scored on, and 45 questions from one person's history is a
+small sample. The README documents this and the other caveats rather than
+burying them.</p>
+
+<p><strong>Built with</strong> the Python standard library &mdash; SQLite for both the
+graph and the vectors. No ORM, no vector database, no graph database. The MCP SDK
+is the only third-party dependency.</p>
+
+<p style="margin-top:22px"><a href="https://github.com/Aditya-20121/claude-memory-graph" target="_blank" rel="noopener">
+Source and full write-up on GitHub &rarr;</a></p>
+<p class="hint">Entity names here are limited to well-known public tools;
+everything drawn from private conversations is masked.</p>
+</div></div>
+  </div>
+  <aside><div class="scroll">
+    <h1>claude-memory-graph</h1>
+    <div class="sub">300 of 2579 entities &middot; 400 of 2895 relations &middot; names masked</div>
+    <div style="margin-top:12px;display:flex;gap:8px">
+      <button id="read">What is this?</button>
+      <button id="spin">Pause spin</button>
+    </div>
+    <div class="sec"><h2>Search</h2><input id="q" placeholder="entity name&hellip;" autocomplete="off"></div>
+    <div class="sec"><h2>Entity kinds</h2><div class="chips" id="kinds"></div></div>
+    <div class="sec"><h2>Edges</h2>
+      <div class="row"><span>solid</span><span>LLM-extracted</span></div>
+      <div class="row"><span>dashed</span><span>from tool calls</span></div>
+      <div class="hint" style="margin-top:7px">Tool-call edges cannot be hallucinated &mdash; no model produced them.</div>
+    </div>
+    <div class="sec" id="sel"><h2>Selection</h2>
+      <div class="hint">Click a node. Drag to orbit, scroll to zoom.</div></div>
+    <div class="sec"><a href="https://github.com/Aditya-20121/claude-memory-graph" target="_blank" rel="noopener">Source on GitHub &rarr;</a></div>
+  </div></aside>
+</div>
+<script>
+const ND=[{"n":"project 1","k":"project","d":413,"m":1},{"n":"project 2","k":"project","d":347,"m":1},{"n":"project 3","k":"project","d":132,"m":1},{"n":"project 4","k":"project","d":94,"m":1},{"n":"project 5","k":"project","d":81,"m":1},{"n":"project 6","k":"project","d":72,"m":1},{"n":"project 7","k":"project","d":57,"m":1},{"n":"Qwen3-VL","k":"technology","d":23,"m":0},{"n":"Remotion","k":"technology","d":21,"m":0},{"n":"project 8","k":"project","d":21,"m":1},{"n":"person 1","k":"person","d":20,"m":1},{"n":"technology 1","k":"technology","d":20,"m":1},{"n":"artifact 1","k":"artifact","d":19,"m":1},{"n":"project 9","k":"project","d":19,"m":1},{"n":"Unsloth","k":"technology","d":19,"m":0},{"n":"artifact 2","k":"artifact","d":18,"m":1},{"n":"artifact 3","k":"artifact","d":18,"m":1},{"n":"artifact 4","k":"artifact","d":17,"m":1},{"n":"artifact 5","k":"artifact","d":17,"m":1},{"n":"project 10","k":"project","d":16,"m":1},{"n":"artifact 6","k":"artifact","d":16,"m":1},{"n":"LoRA","k":"technology","d":16,"m":0},{"n":"artifact 7","k":"artifact","d":16,"m":1},{"n":"artifact 8","k":"artifact","d":15,"m":1},{"n":"artifact 9","k":"artifact","d":14,"m":1},{"n":"project 11","k":"project","d":14,"m":1},{"n":"technology 2","k":"technology","d":14,"m":1},{"n":"artifact 10","k":"artifact","d":12,"m":1},{"n":"artifact 11","k":"artifact","d":12,"m":1},{"n":"artifact 12","k":"artifact","d":12,"m":1},{"n":"Gemini","k":"technology","d":12,"m":0},{"n":"Qwen3-VL-2B","k":"technology","d":12,"m":0},{"n":"Kaggle","k":"technology","d":12,"m":0},{"n":"project 12","k":"project","d":11,"m":1},{"n":"concept 1","k":"concept","d":11,"m":1},{"n":"technology 3","k":"technology","d":11,"m":1},{"n":"artifact 13","k":"artifact","d":11,"m":1},{"n":"technology 4","k":"technology","d":11,"m":1},{"n":"artifact 14","k":"artifact","d":10,"m":1},{"n":"OpenCV","k":"technology","d":10,"m":0},{"n":"artifact 15","k":"artifact","d":10,"m":1},{"n":"technology 5","k":"technology","d":10,"m":1},{"n":"artifact 16","k":"artifact","d":10,"m":1},{"n":"Python","k":"technology","d":9,"m":0},{"n":"artifact 17","k":"artifact","d":9,"m":1},{"n":"Material Design","k":"technology","d":9,"m":0},{"n":"technology 6","k":"technology","d":9,"m":1},{"n":"artifact 18","k":"artifact","d":9,"m":1},{"n":"concept 2","k":"concept","d":9,"m":1},{"n":"artifact 19","k":"artifact","d":9,"m":1},{"n":"artifact 20","k":"artifact","d":8,"m":1},{"n":"concept 3","k":"concept","d":8,"m":1},{"n":"Claude Code","k":"technology","d":8,"m":0},{"n":"project 13","k":"project","d":8,"m":1},{"n":"artifact 21","k":"artifact","d":8,"m":1},{"n":"technology 7","k":"technology","d":8,"m":1},{"n":"PyTorch","k":"technology","d":8,"m":0},{"n":"project 14","k":"project","d":8,"m":1},{"n":"project 15","k":"project","d":7,"m":1},{"n":"project 16","k":"project","d":7,"m":1},{"n":"artifact 22","k":"artifact","d":7,"m":1},{"n":"project 17","k":"project","d":7,"m":1},{"n":"GitHub","k":"technology","d":7,"m":0},{"n":"concept 4","k":"concept","d":7,"m":1},{"n":"design-system","k":"project","d":7,"m":0},{"n":"concept 5","k":"concept","d":7,"m":1},{"n":"project 18","k":"project","d":7,"m":1},{"n":"artifact 23","k":"artifact","d":7,"m":1},{"n":"Qwen3-14B","k":"technology","d":7,"m":0},{"n":"project 19","k":"project","d":7,"m":1},{"n":"artifact 24","k":"artifact","d":7,"m":1},{"n":"artifact 25","k":"artifact","d":7,"m":1},{"n":"artifact 26","k":"artifact","d":7,"m":1},{"n":"concept 6","k":"concept","d":7,"m":1},{"n":"concept 7","k":"concept","d":7,"m":1},{"n":"artifact 27","k":"artifact","d":7,"m":1},{"n":"artifact 28","k":"artifact","d":7,"m":1},{"n":"project 20","k":"project","d":6,"m":1},{"n":"artifact 29","k":"artifact","d":6,"m":1},{"n":"pip","k":"technology","d":6,"m":0},{"n":"problem 1","k":"problem","d":6,"m":1},{"n":"project 21","k":"project","d":6,"m":1},{"n":"artifact 30","k":"artifact","d":6,"m":1},{"n":"artifact 31","k":"artifact","d":6,"m":1},{"n":"concept 8","k":"concept","d":6,"m":1},{"n":"gh CLI","k":"technology","d":6,"m":0},{"n":"artifact 32","k":"artifact","d":6,"m":1},{"n":"project 22","k":"project","d":6,"m":1},{"n":"artifact 33","k":"artifact","d":6,"m":1},{"n":"artifact 34","k":"artifact","d":6,"m":1},{"n":"concept 9","k":"concept","d":6,"m":1},{"n":"artifact 35","k":"artifact","d":6,"m":1},{"n":"concept 10","k":"concept","d":6,"m":1},{"n":"artifact 36","k":"artifact","d":6,"m":1},{"n":"artifact 37","k":"artifact","d":6,"m":1},{"n":"artifact 38","k":"artifact","d":6,"m":1},{"n":"artifact 39","k":"artifact","d":6,"m":1},{"n":"concept 11","k":"concept","d":6,"m":1},{"n":"artifact 40","k":"artifact","d":6,"m":1},{"n":"artifact 41","k":"artifact","d":6,"m":1},{"n":"artifact 42","k":"artifact","d":6,"m":1},{"n":"concept 12","k":"concept","d":6,"m":1},{"n":"technology 8","k":"technology","d":6,"m":1},{"n":"artifact 43","k":"artifact","d":6,"m":1},{"n":"artifact 44","k":"artifact","d":6,"m":1},{"n":"artifact 45","k":"artifact","d":5,"m":1},{"n":"artifact 46","k":"artifact","d":5,"m":1},{"n":"artifact 47","k":"artifact","d":5,"m":1},{"n":"concept 13","k":"concept","d":5,"m":1},{"n":"PowerShell","k":"technology","d":5,"m":0},{"n":"Chrome","k":"technology","d":5,"m":0},{"n":"technology 9","k":"technology","d":5,"m":1},{"n":"technology 10","k":"technology","d":5,"m":1},{"n":"concept 14","k":"concept","d":5,"m":1},{"n":"project 23","k":"project","d":5,"m":1},{"n":"ffmpeg","k":"technology","d":5,"m":0},{"n":"ffprobe","k":"technology","d":5,"m":0},{"n":"artifact 48","k":"artifact","d":5,"m":1},{"n":"artifact 49","k":"artifact","d":5,"m":1},{"n":"technology 11","k":"technology","d":5,"m":1},{"n":"artifact 50","k":"artifact","d":5,"m":1},{"n":"project 24","k":"project","d":5,"m":1},{"n":"project 25","k":"project","d":5,"m":1},{"n":"concept 15","k":"concept","d":5,"m":1},{"n":"artifact 51","k":"artifact","d":5,"m":1},{"n":"artifact 52","k":"artifact","d":5,"m":1},{"n":"concept 16","k":"concept","d":5,"m":1},{"n":"concept 17","k":"concept","d":5,"m":1},{"n":"WCAG","k":"concept","d":5,"m":0},{"n":"concept 18","k":"concept","d":5,"m":1},{"n":"artifact 53","k":"artifact","d":5,"m":1},{"n":"concept 19","k":"concept","d":5,"m":1},{"n":"project 26","k":"project","d":5,"m":1},{"n":"concept 20","k":"concept","d":5,"m":1},{"n":"design system","k":"concept","d":5,"m":0},{"n":"artifact 54","k":"artifact","d":5,"m":1},{"n":"artifact 55","k":"artifact","d":5,"m":1},{"n":"technology 12","k":"technology","d":5,"m":1},{"n":"artifact 56","k":"artifact","d":5,"m":1},{"n":"technology 13","k":"technology","d":5,"m":1},{"n":"project 27","k":"project","d":5,"m":1},{"n":"concept 21","k":"concept","d":5,"m":1},{"n":"artifact 57","k":"artifact","d":5,"m":1},{"n":"concept 22","k":"concept","d":5,"m":1},{"n":"artifact 58","k":"artifact","d":5,"m":1},{"n":"concept 23","k":"concept","d":5,"m":1},{"n":"concept 24","k":"concept","d":5,"m":1},{"n":"technology 14","k":"technology","d":5,"m":1},{"n":"artifact 59","k":"artifact","d":5,"m":1},{"n":"artifact 60","k":"artifact","d":5,"m":1},{"n":"artifact 61","k":"artifact","d":5,"m":1},{"n":"artifact 62","k":"artifact","d":5,"m":1},{"n":"artifact 63","k":"artifact","d":5,"m":1},{"n":"artifact 64","k":"artifact","d":5,"m":1},{"n":"artifact 65","k":"artifact","d":5,"m":1},{"n":"artifact 66","k":"artifact","d":5,"m":1},{"n":"concept 25","k":"concept","d":4,"m":1},{"n":"artifact 67","k":"artifact","d":4,"m":1},{"n":"project 28","k":"project","d":4,"m":1},{"n":"React","k":"technology","d":4,"m":0},{"n":"technology 15","k":"technology","d":4,"m":1},{"n":"concept 26","k":"concept","d":4,"m":1},{"n":"artifact 68","k":"artifact","d":4,"m":1},{"n":"concept 27","k":"concept","d":4,"m":1},{"n":"artifact 69","k":"artifact","d":4,"m":1},{"n":"npm","k":"technology","d":4,"m":0},{"n":"concept 28","k":"concept","d":4,"m":1},{"n":"artifact 70","k":"artifact","d":4,"m":1},{"n":"project 29","k":"project","d":4,"m":1},{"n":"artifact 71","k":"artifact","d":4,"m":1},{"n":"decision 1","k":"decision","d":4,"m":1},{"n":"concept 29","k":"concept","d":4,"m":1},{"n":"technology 16","k":"technology","d":4,"m":1},{"n":"artifact 72","k":"artifact","d":4,"m":1},{"n":"concept 30","k":"concept","d":4,"m":1},{"n":"concept 31","k":"concept","d":4,"m":1},{"n":"Typography","k":"concept","d":4,"m":0},{"n":"artifact 73","k":"artifact","d":4,"m":1},{"n":"concept 32","k":"concept","d":4,"m":1},{"n":"concept 33","k":"concept","d":4,"m":1},{"n":"Git","k":"technology","d":4,"m":0},{"n":"artifact 74","k":"artifact","d":4,"m":1},{"n":"artifact 75","k":"artifact","d":4,"m":1},{"n":"artifact 76","k":"artifact","d":4,"m":1},{"n":"artifact 77","k":"artifact","d":4,"m":1},{"n":"concept 34","k":"concept","d":4,"m":1},{"n":"concept 35","k":"concept","d":4,"m":1},{"n":"concept 36","k":"concept","d":4,"m":1},{"n":"artifact 78","k":"artifact","d":4,"m":1},{"n":"concept 37","k":"concept","d":4,"m":1},{"n":"concept 38","k":"concept","d":4,"m":1},{"n":"project 30","k":"project","d":4,"m":1},{"n":"concept 39","k":"concept","d":4,"m":1},{"n":"project 31","k":"project","d":4,"m":1},{"n":"concept 40","k":"concept","d":4,"m":1},{"n":"artifact 79","k":"artifact","d":4,"m":1},{"n":"project 32","k":"project","d":4,"m":1},{"n":"artifact 80","k":"artifact","d":4,"m":1},{"n":"artifact 81","k":"artifact","d":4,"m":1},{"n":"project 33","k":"project","d":4,"m":1},{"n":"project 34","k":"project","d":4,"m":1},{"n":"concept 41","k":"concept","d":4,"m":1},{"n":"artifact 82","k":"artifact","d":4,"m":1},{"n":"artifact 83","k":"artifact","d":4,"m":1},{"n":"artifact 84","k":"artifact","d":4,"m":1},{"n":"artifact 85","k":"artifact","d":4,"m":1},{"n":"concept 42","k":"concept","d":4,"m":1},{"n":"technology 17","k":"technology","d":4,"m":1},{"n":"project 35","k":"project","d":4,"m":1},{"n":"decision 2","k":"decision","d":4,"m":1},{"n":"concept 43","k":"concept","d":4,"m":1},{"n":"artifact 86","k":"artifact","d":4,"m":1},{"n":"technology 18","k":"technology","d":4,"m":1},{"n":"technology 19","k":"technology","d":4,"m":1},{"n":"technology 20","k":"technology","d":4,"m":1},{"n":"artifact 87","k":"artifact","d":4,"m":1},{"n":"concept 44","k":"concept","d":4,"m":1},{"n":"concept 45","k":"concept","d":4,"m":1},{"n":"concept 46","k":"concept","d":4,"m":1},{"n":"artifact 88","k":"artifact","d":4,"m":1},{"n":"artifact 89","k":"artifact","d":4,"m":1},{"n":"concept 47","k":"concept","d":4,"m":1},{"n":"technology 21","k":"technology","d":4,"m":1},{"n":"artifact 90","k":"artifact","d":4,"m":1},{"n":"artifact 91","k":"artifact","d":4,"m":1},{"n":"artifact 92","k":"artifact","d":4,"m":1},{"n":"artifact 93","k":"artifact","d":4,"m":1},{"n":"artifact 94","k":"artifact","d":4,"m":1},{"n":"technology 22","k":"technology","d":4,"m":1},{"n":"gh","k":"technology","d":4,"m":0},{"n":"artifact 95","k":"artifact","d":4,"m":1},{"n":"artifact 96","k":"artifact","d":4,"m":1},{"n":"artifact 97","k":"artifact","d":4,"m":1},{"n":"artifact 98","k":"artifact","d":4,"m":1},{"n":"artifact 99","k":"artifact","d":4,"m":1},{"n":"TypeScript","k":"technology","d":3,"m":0},{"n":"artifact 100","k":"artifact","d":3,"m":1},{"n":"artifact 101","k":"artifact","d":3,"m":1},{"n":"artifact 102","k":"artifact","d":3,"m":1},{"n":"artifact 103","k":"artifact","d":3,"m":1},{"n":"HuggingFace","k":"technology","d":3,"m":0},{"n":"technology 23","k":"technology","d":3,"m":1},{"n":"technology 24","k":"technology","d":3,"m":1},{"n":"artifact 104","k":"artifact","d":3,"m":1},{"n":"artifact 105","k":"artifact","d":3,"m":1},{"n":"artifact 106","k":"artifact","d":3,"m":1},{"n":"artifact 107","k":"artifact","d":3,"m":1},{"n":"project 36","k":"project","d":3,"m":1},{"n":"artifact 108","k":"artifact","d":3,"m":1},{"n":"project 37","k":"project","d":3,"m":1},{"n":"artifact 109","k":"artifact","d":3,"m":1},{"n":"concept 48","k":"concept","d":3,"m":1},{"n":"concept 49","k":"concept","d":3,"m":1},{"n":"artifact 110","k":"artifact","d":3,"m":1},{"n":"artifact 111","k":"artifact","d":3,"m":1},{"n":"concept 50","k":"concept","d":3,"m":1},{"n":"concept 51","k":"concept","d":3,"m":1},{"n":"artifact 112","k":"artifact","d":3,"m":1},{"n":"artifact 113","k":"artifact","d":3,"m":1},{"n":"project 38","k":"project","d":3,"m":1},{"n":"project 39","k":"project","d":3,"m":1},{"n":"artifact 114","k":"artifact","d":3,"m":1},{"n":"concept 52","k":"concept","d":3,"m":1},{"n":"technology 25","k":"technology","d":3,"m":1},{"n":"artifact 115","k":"artifact","d":3,"m":1},{"n":"artifact 116","k":"artifact","d":3,"m":1},{"n":"project 40","k":"project","d":3,"m":1},{"n":"concept 53","k":"concept","d":3,"m":1},{"n":"concept 54","k":"concept","d":3,"m":1},{"n":"concept 55","k":"concept","d":3,"m":1},{"n":"project 41","k":"project","d":3,"m":1},{"n":"artifact 117","k":"artifact","d":3,"m":1},{"n":"project 42","k":"project","d":3,"m":1},{"n":"artifact 118","k":"artifact","d":3,"m":1},{"n":"person 2","k":"person","d":3,"m":1},{"n":"technology 26","k":"technology","d":3,"m":1},{"n":"artifact 119","k":"artifact","d":3,"m":1},{"n":"Google Fonts","k":"technology","d":3,"m":0},{"n":"concept 56","k":"concept","d":3,"m":1},{"n":"technology 27","k":"technology","d":3,"m":1},{"n":"artifact 120","k":"artifact","d":3,"m":1},{"n":"Accessibility","k":"concept","d":3,"m":0},{"n":"artifact 121","k":"artifact","d":3,"m":1},{"n":"concept 57","k":"concept","d":3,"m":1},{"n":"concept 58","k":"concept","d":3,"m":1},{"n":"concept 59","k":"concept","d":3,"m":1},{"n":"concept 60","k":"concept","d":3,"m":1},{"n":"decision 3","k":"decision","d":3,"m":1},{"n":"artifact 122","k":"artifact","d":3,"m":1},{"n":"artifact 123","k":"artifact","d":3,"m":1},{"n":"artifact 124","k":"artifact","d":3,"m":1},{"n":"concept 61","k":"concept","d":3,"m":1},{"n":"concept 62","k":"concept","d":3,"m":1},{"n":"project 43","k":"project","d":3,"m":1},{"n":"concept 63","k":"concept","d":3,"m":1},{"n":"project 44","k":"project","d":3,"m":1},{"n":"concept 64","k":"concept","d":3,"m":1},{"n":"artifact 125","k":"artifact","d":3,"m":1},{"n":"concept 65","k":"concept","d":3,"m":1},{"n":"artifact 126","k":"artifact","d":3,"m":1}], LK=[{"s":156,"t":105,"p":"part_of","x":"llm","c":1},{"s":156,"t":1,"p":"part_of","x":"llm","c":1},{"s":105,"t":156,"p":"uses","x":"llm","c":1},{"s":1,"t":105,"p":"depends_on","x":"llm","c":1},{"s":1,"t":33,"p":"depends_on","x":"llm","c":1},{"s":1,"t":134,"p":"depends_on","x":"llm","c":1},{"s":1,"t":201,"p":"depends_on","x":"llm","c":1},{"s":1,"t":137,"p":"depends_on","x":"llm","c":1},{"s":1,"t":211,"p":"depends_on","x":"llm","c":1},{"s":1,"t":209,"p":"implements","x":"llm","c":1},{"s":1,"t":211,"p":"implements","x":"llm","c":1},{"s":1,"t":218,"p":"implements","x":"llm","c":1},{"s":1,"t":72,"p":"implements","x":"llm","c":1},{"s":1,"t":52,"p":"part_of","x":"llm","c":1},{"s":1,"t":208,"p":"part_of","x":"llm","c":2},{"s":1,"t":62,"p":"uses","x":"llm","c":1},{"s":1,"t":277,"p":"uses","x":"llm","c":1},{"s":1,"t":97,"p":"uses","x":"llm","c":2},{"s":1,"t":39,"p":"uses","x":"llm","c":2},{"s":1,"t":31,"p":"uses","x":"llm","c":1},{"s":1,"t":32,"p":"uses","x":"llm","c":2},{"s":1,"t":48,"p":"uses","x":"llm","c":1},{"s":1,"t":136,"p":"uses","x":"llm","c":2},{"s":1,"t":21,"p":"uses","x":"llm","c":2},{"s":1,"t":138,"p":"uses","x":"llm","c":1},{"s":1,"t":7,"p":"uses","x":"llm","c":2},{"s":1,"t":14,"p":"uses","x":"llm","c":1},{"s":1,"t":16,"p":"uses","x":"llm","c":1},{"s":1,"t":207,"p":"uses","x":"llm","c":1},{"s":1,"t":70,"p":"uses","x":"llm","c":1},{"s":1,"t":56,"p":"uses","x":"llm","c":1},{"s":1,"t":144,"p":"uses","x":"llm","c":1},{"s":1,"t":212,"p":"uses","x":"llm","c":1},{"s":1,"t":216,"p":"uses","x":"llm","c":1},{"s":1,"t":217,"p":"uses","x":"llm","c":1},{"s":1,"t":218,"p":"uses","x":"llm","c":2},{"s":1,"t":147,"p":"uses","x":"llm","c":1},{"s":1,"t":220,"p":"uses","x":"llm","c":1},{"s":106,"t":1,"p":"part_of","x":"llm","c":1},{"s":77,"t":0,"p":"part_of","x":"llm","c":2},{"s":77,"t":157,"p":"uses","x":"llm","c":1},{"s":77,"t":271,"p":"uses","x":"llm","c":1},{"s":77,"t":85,"p":"uses","x":"llm","c":1},{"s":0,"t":157,"p":"uses","x":"llm","c":1},{"s":0,"t":180,"p":"uses","x":"llm","c":1},{"s":58,"t":0,"p":"part_of","x":"llm","c":3},{"s":58,"t":157,"p":"uses","x":"llm","c":1},{"s":58,"t":271,"p":"uses","x":"llm","c":1},{"s":158,"t":159,"p":"uses","x":"llm","c":1},{"s":158,"t":235,"p":"uses","x":"llm","c":1},{"s":24,"t":50,"p":"uses","x":"llm","c":1},{"s":24,"t":107,"p":"uses","x":"llm","c":1},{"s":24,"t":78,"p":"uses","x":"llm","c":1},{"s":107,"t":24,"p":"part_of","x":"llm","c":1},{"s":107,"t":108,"p":"part_of","x":"llm","c":1},{"s":107,"t":80,"p":"part_of","x":"llm","c":1},{"s":78,"t":108,"p":"part_of","x":"llm","c":1},{"s":78,"t":80,"p":"part_of","x":"llm","c":1},{"s":236,"t":24,"p":"part_of","x":"llm","c":1},{"s":236,"t":108,"p":"part_of","x":"llm","c":1},{"s":237,"t":24,"p":"part_of","x":"llm","c":1},{"s":237,"t":108,"p":"part_of","x":"llm","c":1},{"s":109,"t":0,"p":"uses","x":"structural","c":4},{"s":110,"t":161,"p":"uses","x":"llm","c":1},{"s":110,"t":38,"p":"uses","x":"llm","c":1},{"s":162,"t":166,"p":"causes","x":"llm","c":1},{"s":162,"t":240,"p":"part_of","x":"llm","c":1},{"s":59,"t":107,"p":"fixes","x":"llm","c":1},{"s":59,"t":78,"p":"fixes","x":"llm","c":1},{"s":59,"t":236,"p":"fixes","x":"llm","c":1},{"s":59,"t":237,"p":"fixes","x":"llm","c":1},{"s":79,"t":1,"p":"uses","x":"structural","c":1},{"s":79,"t":4,"p":"uses","x":"structural","c":1},{"s":10,"t":170,"p":"decided","x":"llm","c":1},{"s":10,"t":77,"p":"implements","x":"llm","c":1},{"s":10,"t":58,"p":"implements","x":"llm","c":1},{"s":10,"t":6,"p":"implements","x":"llm","c":1},{"s":10,"t":33,"p":"uses","x":"llm","c":1},{"s":10,"t":39,"p":"uses","x":"llm","c":1},{"s":10,"t":32,"p":"uses","x":"llm","c":1},{"s":163,"t":43,"p":"depends_on","x":"llm","c":1},{"s":163,"t":79,"p":"uses","x":"llm","c":1},{"s":163,"t":43,"p":"uses","x":"llm","c":1},{"s":43,"t":0,"p":"uses","x":"structural","c":3},{"s":243,"t":244,"p":"part_of","x":"llm","c":1},{"s":243,"t":245,"p":"uses","x":"llm","c":1},{"s":165,"t":4,"p":"uses","x":"structural","c":3},{"s":246,"t":0,"p":"part_of","x":"llm","c":1},{"s":246,"t":168,"p":"part_of","x":"llm","c":1},{"s":111,"t":0,"p":"uses","x":"structural","c":1},{"s":111,"t":2,"p":"uses","x":"structural","c":1},{"s":111,"t":4,"p":"uses","x":"structural","c":2},{"s":248,"t":167,"p":"part_of","x":"llm","c":1},{"s":167,"t":112,"p":"uses","x":"llm","c":1},{"s":33,"t":1,"p":"part_of","x":"llm","c":1},{"s":250,"t":168,"p":"part_of","x":"llm","c":1},{"s":112,"t":251,"p":"uses","x":"llm","c":1},{"s":251,"t":112,"p":"part_of","x":"llm","c":1},{"s":252,"t":81,"p":"compared_to","x":"llm","c":1},{"s":81,"t":252,"p":"compared_to","x":"llm","c":1},{"s":81,"t":256,"p":"implements","x":"llm","c":1},{"s":169,"t":4,"p":"part_of","x":"structural","c":1},{"s":82,"t":254,"p":"part_of","x":"llm","c":1},{"s":82,"t":113,"p":"part_of","x":"llm","c":1},{"s":170,"t":82,"p":"uses","x":"llm","c":1},{"s":44,"t":4,"p":"part_of","x":"structural","c":8},{"s":44,"t":112,"p":"uses","x":"llm","c":1},{"s":83,"t":17,"p":"depends_on","x":"llm","c":1},{"s":83,"t":25,"p":"part_of","x":"llm","c":1},{"s":83,"t":5,"p":"part_of","x":"llm","c":2},{"s":83,"t":172,"p":"uses","x":"llm","c":1},{"s":25,"t":183,"p":"implements","x":"llm","c":1},{"s":25,"t":119,"p":"uses","x":"llm","c":1},{"s":17,"t":263,"p":"implements","x":"llm","c":1},{"s":17,"t":0,"p":"part_of","x":"structural","c":1},{"s":17,"t":2,"p":"part_of","x":"structural","c":4},{"s":17,"t":279,"p":"uses","x":"llm","c":1},{"s":17,"t":292,"p":"uses","x":"llm","c":1},{"s":27,"t":5,"p":"part_of","x":"llm","c":3},{"s":27,"t":8,"p":"uses","x":"llm","c":1},{"s":27,"t":18,"p":"uses","x":"llm","c":1},{"s":27,"t":172,"p":"uses","x":"llm","c":1},{"s":8,"t":5,"p":"part_of","x":"llm","c":1},{"s":8,"t":115,"p":"uses","x":"llm","c":2},{"s":8,"t":116,"p":"uses","x":"llm","c":2},{"s":8,"t":279,"p":"uses","x":"llm","c":1},{"s":18,"t":19,"p":"depends_on","x":"llm","c":1},{"s":18,"t":0,"p":"part_of","x":"structural","c":8},{"s":18,"t":2,"p":"part_of","x":"structural","c":3},{"s":19,"t":261,"p":"depends_on","x":"llm","c":1},{"s":19,"t":25,"p":"part_of","x":"llm","c":1},{"s":19,"t":2,"p":"part_of","x":"llm","c":1},{"s":19,"t":17,"p":"uses","x":"llm","c":1},{"s":19,"t":172,"p":"uses","x":"llm","c":1},{"s":5,"t":46,"p":"evaluates","x":"llm","c":1},{"s":5,"t":262,"p":"implements","x":"llm","c":1},{"s":5,"t":52,"p":"part_of","x":"llm","c":1},{"s":5,"t":8,"p":"uses","x":"llm","c":4},{"s":5,"t":174,"p":"uses","x":"llm","c":1},{"s":5,"t":175,"p":"uses","x":"llm","c":1},{"s":5,"t":84,"p":"uses","x":"llm","c":1},{"s":5,"t":280,"p":"uses","x":"llm","c":1},{"s":5,"t":63,"p":"uses","x":"llm","c":1},{"s":5,"t":129,"p":"uses","x":"llm","c":1},{"s":257,"t":5,"p":"part_of","x":"llm","c":1},{"s":28,"t":5,"p":"part_of","x":"llm","c":4},{"s":28,"t":260,"p":"part_of","x":"llm","c":1},{"s":28,"t":18,"p":"uses","x":"llm","c":1},{"s":28,"t":173,"p":"uses","x":"llm","c":1},{"s":114,"t":124,"p":"depends_on","x":"llm","c":1},{"s":114,"t":25,"p":"part_of","x":"llm","c":1},{"s":114,"t":172,"p":"uses","x":"llm","c":1},{"s":2,"t":5,"p":"part_of","x":"llm","c":1},{"s":2,"t":17,"p":"uses","x":"llm","c":1},{"s":2,"t":8,"p":"uses","x":"llm","c":1},{"s":2,"t":119,"p":"uses","x":"llm","c":1},{"s":2,"t":290,"p":"uses","x":"llm","c":1},{"s":2,"t":92,"p":"uses","x":"llm","c":1},{"s":2,"t":68,"p":"uses","x":"llm","c":1},{"s":260,"t":261,"p":"depends_on","x":"llm","c":1},{"s":260,"t":261,"p":"uses","x":"llm","c":1},{"s":173,"t":0,"p":"part_of","x":"structural","c":2},{"s":173,"t":2,"p":"part_of","x":"structural","c":1},{"s":175,"t":5,"p":"part_of","x":"llm","c":1},{"s":117,"t":0,"p":"part_of","x":"structural","c":4},{"s":118,"t":60,"p":"compared_to","x":"llm","c":1},{"s":118,"t":5,"p":"part_of","x":"llm","c":1},{"s":118,"t":12,"p":"uses","x":"llm","c":1},{"s":60,"t":174,"p":"depends_on","x":"llm","c":1},{"s":60,"t":5,"p":"part_of","x":"llm","c":2},{"s":60,"t":8,"p":"uses","x":"llm","c":1},{"s":12,"t":0,"p":"part_of","x":"structural","c":12},{"s":12,"t":2,"p":"part_of","x":"structural","c":5},{"s":264,"t":25,"p":"part_of","x":"llm","c":1},{"s":264,"t":265,"p":"uses","x":"llm","c":1},{"s":265,"t":266,"p":"part_of","x":"llm","c":1},{"s":178,"t":286,"p":"causes","x":"llm","c":1},{"s":268,"t":5,"p":"part_of","x":"llm","c":1},{"s":61,"t":159,"p":"uses","x":"llm","c":1},{"s":61,"t":235,"p":"uses","x":"llm","c":1},{"s":120,"t":25,"p":"part_of","x":"llm","c":1},{"s":121,"t":0,"p":"part_of","x":"llm","c":2},{"s":121,"t":270,"p":"replaces","x":"llm","c":1},{"s":121,"t":85,"p":"uses","x":"llm","c":1},{"s":6,"t":0,"p":"part_of","x":"llm","c":2},{"s":6,"t":52,"p":"part_of","x":"llm","c":1},{"s":6,"t":159,"p":"uses","x":"llm","c":1},{"s":6,"t":8,"p":"uses","x":"llm","c":1},{"s":6,"t":85,"p":"uses","x":"llm","c":1},{"s":272,"t":0,"p":"part_of","x":"llm","c":1},{"s":272,"t":271,"p":"uses","x":"llm","c":1},{"s":272,"t":85,"p":"uses","x":"llm","c":1},{"s":273,"t":0,"p":"part_of","x":"llm","c":1},{"s":274,"t":180,"p":"uses","x":"llm","c":1},{"s":180,"t":3,"p":"uses","x":"structural","c":1},{"s":180,"t":9,"p":"uses","x":"structural","c":1},{"s":275,"t":276,"p":"depends_on","x":"llm","c":1},{"s":275,"t":62,"p":"uses","x":"llm","c":1},{"s":276,"t":62,"p":"part_of","x":"llm","c":1},{"s":86,"t":0,"p":"part_of","x":"llm","c":1},{"s":29,"t":51,"p":"implements","x":"llm","c":1},{"s":29,"t":0,"p":"part_of","x":"structural","c":9},{"s":29,"t":5,"p":"part_of","x":"llm","c":1},{"s":51,"t":5,"p":"part_of","x":"llm","c":1},{"s":51,"t":277,"p":"uses","x":"llm","c":1},{"s":87,"t":5,"p":"part_of","x":"llm","c":1},{"s":181,"t":25,"p":"part_of","x":"llm","c":1},{"s":15,"t":0,"p":"part_of","x":"structural","c":13},{"s":15,"t":25,"p":"part_of","x":"llm","c":1},{"s":15,"t":2,"p":"part_of","x":"structural","c":2},{"s":182,"t":0,"p":"part_of","x":"structural","c":3},{"s":122,"t":259,"p":"depends_on","x":"llm","c":1},{"s":122,"t":259,"p":"uses","x":"llm","c":1},{"s":122,"t":278,"p":"uses","x":"llm","c":1},{"s":183,"t":25,"p":"part_of","x":"llm","c":1},{"s":183,"t":5,"p":"part_of","x":"llm","c":1},{"s":124,"t":0,"p":"part_of","x":"structural","c":3},{"s":124,"t":60,"p":"part_of","x":"llm","c":1},{"s":280,"t":5,"p":"part_of","x":"llm","c":1},{"s":63,"t":5,"p":"part_of","x":"llm","c":1},{"s":63,"t":281,"p":"uses","x":"llm","c":1},{"s":184,"t":87,"p":"part_of","x":"llm","c":1},{"s":126,"t":294,"p":"part_of","x":"llm","c":1},{"s":88,"t":5,"p":"part_of","x":"llm","c":2},{"s":186,"t":128,"p":"depends_on","x":"llm","c":1},{"s":186,"t":128,"p":"uses","x":"llm","c":1},{"s":186,"t":187,"p":"uses","x":"llm","c":1},{"s":64,"t":283,"p":"implements","x":"llm","c":1},{"s":64,"t":89,"p":"uses","x":"llm","c":1},{"s":282,"t":64,"p":"part_of","x":"llm","c":1},{"s":282,"t":89,"p":"replaces","x":"llm","c":1},{"s":188,"t":64,"p":"part_of","x":"llm","c":2},{"s":188,"t":89,"p":"replaces","x":"llm","c":1},{"s":283,"t":282,"p":"depends_on","x":"llm","c":1},{"s":283,"t":89,"p":"depends_on","x":"llm","c":1},{"s":89,"t":64,"p":"part_of","x":"llm","c":1},{"s":284,"t":131,"p":"part_of","x":"llm","c":1},{"s":284,"t":45,"p":"uses","x":"llm","c":2},{"s":285,"t":131,"p":"part_of","x":"llm","c":1},{"s":285,"t":45,"p":"uses","x":"llm","c":2},{"s":90,"t":88,"p":"part_of","x":"llm","c":1},{"s":23,"t":0,"p":"part_of","x":"structural","c":10},{"s":23,"t":25,"p":"part_of","x":"llm","c":1},{"s":23,"t":2,"p":"part_of","x":"structural","c":4},{"s":288,"t":5,"p":"part_of","x":"llm","c":1},{"s":65,"t":29,"p":"part_of","x":"llm","c":1},{"s":65,"t":116,"p":"uses","x":"llm","c":1},{"s":46,"t":79,"p":"depends_on","x":"llm","c":1},{"s":46,"t":43,"p":"depends_on","x":"llm","c":1},{"s":46,"t":115,"p":"depends_on","x":"llm","c":1},{"s":46,"t":8,"p":"uses","x":"llm","c":1},{"s":46,"t":52,"p":"uses","x":"llm","c":1},{"s":190,"t":191,"p":"part_of","x":"llm","c":1},{"s":290,"t":2,"p":"part_of","x":"llm","c":1},{"s":290,"t":92,"p":"uses","x":"llm","c":1},{"s":92,"t":289,"p":"depends_on","x":"llm","c":2},{"s":66,"t":8,"p":"uses","x":"llm","c":1},{"s":130,"t":66,"p":"part_of","x":"llm","c":1},{"s":67,"t":2,"p":"part_of","x":"structural","c":3},{"s":67,"t":270,"p":"part_of","x":"llm","c":1},{"s":295,"t":68,"p":"implements","x":"llm","c":1},{"s":20,"t":298,"p":"fixes","x":"llm","c":1},{"s":20,"t":3,"p":"part_of","x":"llm","c":5},{"s":20,"t":298,"p":"uses","x":"llm","c":1},{"s":3,"t":20,"p":"depends_on","x":"llm","c":1},{"s":3,"t":22,"p":"implements","x":"llm","c":1},{"s":3,"t":52,"p":"part_of","x":"llm","c":1},{"s":3,"t":62,"p":"uses","x":"llm","c":2},{"s":3,"t":135,"p":"uses","x":"llm","c":1},{"s":299,"t":3,"p":"part_of","x":"llm","c":1},{"s":299,"t":20,"p":"uses","x":"llm","c":1},{"s":132,"t":3,"p":"part_of","x":"llm","c":1},{"s":94,"t":3,"p":"part_of","x":"structural","c":1},{"s":94,"t":132,"p":"part_of","x":"llm","c":1},{"s":47,"t":3,"p":"part_of","x":"llm","c":1},{"s":134,"t":3,"p":"part_of","x":"llm","c":1},{"s":135,"t":3,"p":"part_of","x":"llm","c":1},{"s":198,"t":96,"p":"part_of","x":"llm","c":1},{"s":97,"t":1,"p":"part_of","x":"llm","c":2},{"s":34,"t":1,"p":"part_of","x":"llm","c":2},{"s":34,"t":3,"p":"part_of","x":"llm","c":1},{"s":34,"t":90,"p":"uses","x":"llm","c":2},{"s":69,"t":235,"p":"uses","x":"llm","c":1},{"s":69,"t":43,"p":"uses","x":"llm","c":1},{"s":9,"t":52,"p":"part_of","x":"llm","c":1},{"s":9,"t":30,"p":"uses","x":"llm","c":1},{"s":98,"t":115,"p":"uses","x":"llm","c":1},{"s":31,"t":39,"p":"uses","x":"llm","c":1},{"s":31,"t":208,"p":"uses","x":"llm","c":1},{"s":31,"t":56,"p":"uses","x":"llm","c":1},{"s":99,"t":1,"p":"part_of","x":"llm","c":2},{"s":99,"t":13,"p":"part_of","x":"llm","c":1},{"s":99,"t":219,"p":"part_of","x":"llm","c":1},{"s":99,"t":32,"p":"uses","x":"llm","c":1},{"s":99,"t":21,"p":"uses","x":"llm","c":1},{"s":40,"t":1,"p":"part_of","x":"structural","c":5},{"s":100,"t":1,"p":"part_of","x":"structural","c":4},{"s":54,"t":1,"p":"part_of","x":"structural","c":6},{"s":54,"t":202,"p":"part_of","x":"llm","c":1},{"s":13,"t":73,"p":"implements","x":"llm","c":1},{"s":48,"t":210,"p":"depends_on","x":"llm","c":1},{"s":136,"t":222,"p":"uses","x":"llm","c":1},{"s":203,"t":13,"p":"part_of","x":"llm","c":1},{"s":21,"t":205,"p":"depends_on","x":"llm","c":1},{"s":21,"t":56,"p":"uses","x":"llm","c":1},{"s":7,"t":39,"p":"uses","x":"llm","c":3},{"s":7,"t":21,"p":"uses","x":"llm","c":3},{"s":7,"t":14,"p":"uses","x":"llm","c":2},{"s":7,"t":56,"p":"uses","x":"llm","c":4},{"s":14,"t":7,"p":"uses","x":"llm","c":1},{"s":14,"t":56,"p":"uses","x":"llm","c":1},{"s":55,"t":21,"p":"implements","x":"llm","c":1},{"s":55,"t":21,"p":"uses","x":"llm","c":1},{"s":55,"t":14,"p":"uses","x":"llm","c":1},{"s":55,"t":144,"p":"uses","x":"llm","c":1},{"s":204,"t":1,"p":"part_of","x":"structural","c":2},{"s":204,"t":145,"p":"part_of","x":"llm","c":1},{"s":204,"t":39,"p":"uses","x":"llm","c":1},{"s":16,"t":1,"p":"part_of","x":"llm","c":5},{"s":16,"t":32,"p":"uses","x":"llm","c":1},{"s":16,"t":14,"p":"uses","x":"llm","c":1},{"s":16,"t":139,"p":"uses","x":"llm","c":1},{"s":16,"t":207,"p":"uses","x":"llm","c":1},{"s":16,"t":70,"p":"uses","x":"llm","c":1},{"s":16,"t":73,"p":"uses","x":"llm","c":1},{"s":139,"t":21,"p":"uses","x":"llm","c":2},{"s":139,"t":14,"p":"uses","x":"llm","c":1},{"s":205,"t":21,"p":"uses","x":"llm","c":1},{"s":205,"t":14,"p":"uses","x":"llm","c":1},{"s":140,"t":1,"p":"part_of","x":"llm","c":1},{"s":206,"t":97,"p":"part_of","x":"llm","c":1},{"s":141,"t":206,"p":"part_of","x":"llm","c":1},{"s":142,"t":1,"p":"part_of","x":"llm","c":1},{"s":142,"t":31,"p":"uses","x":"llm","c":1},{"s":142,"t":70,"p":"uses","x":"llm","c":1},{"s":142,"t":224,"p":"uses","x":"llm","c":1},{"s":70,"t":13,"p":"part_of","x":"llm","c":1},{"s":209,"t":1,"p":"part_of","x":"llm","c":1},{"s":143,"t":48,"p":"compared_to","x":"llm","c":1},{"s":143,"t":210,"p":"depends_on","x":"llm","c":1},{"s":144,"t":1,"p":"part_of","x":"structural","c":1},{"s":212,"t":1,"p":"part_of","x":"llm","c":1},{"s":215,"t":13,"p":"part_of","x":"llm","c":1},{"s":215,"t":32,"p":"uses","x":"llm","c":1},{"s":103,"t":1,"p":"part_of","x":"structural","c":3},{"s":103,"t":145,"p":"part_of","x":"llm","c":1},{"s":103,"t":31,"p":"uses","x":"llm","c":1},{"s":218,"t":146,"p":"depends_on","x":"llm","c":1},{"s":71,"t":1,"p":"part_of","x":"llm","c":1},{"s":219,"t":1,"p":"part_of","x":"llm","c":2},{"s":220,"t":32,"p":"uses","x":"llm","c":1},{"s":72,"t":14,"p":"depends_on","x":"llm","c":1},{"s":72,"t":1,"p":"part_of","x":"structural","c":4},{"s":73,"t":13,"p":"part_of","x":"llm","c":1},{"s":223,"t":1,"p":"part_of","x":"structural","c":3},{"s":225,"t":32,"p":"depends_on","x":"llm","c":1},{"s":225,"t":32,"p":"part_of","x":"llm","c":1},{"s":226,"t":1,"p":"part_of","x":"llm","c":1},{"s":227,"t":1,"p":"part_of","x":"llm","c":1},{"s":228,"t":0,"p":"uses","x":"structural","c":4},{"s":35,"t":4,"p":"uses","x":"structural","c":11},{"s":41,"t":0,"p":"uses","x":"structural","c":10},{"s":229,"t":0,"p":"uses","x":"structural","c":1},{"s":229,"t":2,"p":"uses","x":"structural","c":1},{"s":229,"t":3,"p":"uses","x":"structural","c":1},{"s":229,"t":4,"p":"uses","x":"structural","c":1},{"s":230,"t":4,"p":"part_of","x":"structural","c":4},{"s":231,"t":0,"p":"part_of","x":"structural","c":4},{"s":148,"t":0,"p":"part_of","x":"structural","c":3},{"s":148,"t":2,"p":"part_of","x":"structural","c":2},{"s":42,"t":0,"p":"part_of","x":"structural","c":7},{"s":42,"t":2,"p":"part_of","x":"structural","c":3},{"s":149,"t":0,"p":"part_of","x":"structural","c":3},{"s":149,"t":2,"p":"part_of","x":"structural","c":2},{"s":150,"t":0,"p":"part_of","x":"structural","c":5},{"s":75,"t":0,"p":"part_of","x":"structural","c":6},{"s":75,"t":2,"p":"part_of","x":"structural","c":1},{"s":36,"t":0,"p":"part_of","x":"structural","c":8},{"s":36,"t":2,"p":"part_of","x":"structural","c":3},{"s":151,"t":0,"p":"part_of","x":"structural","c":2},{"s":151,"t":2,"p":"part_of","x":"structural","c":3},{"s":152,"t":0,"p":"part_of","x":"structural","c":5},{"s":153,"t":0,"p":"part_of","x":"structural","c":5},{"s":154,"t":0,"p":"part_of","x":"structural","c":5},{"s":155,"t":0,"p":"part_of","x":"structural","c":5},{"s":232,"t":0,"p":"part_of","x":"structural","c":4},{"s":104,"t":1,"p":"part_of","x":"structural","c":6},{"s":76,"t":1,"p":"part_of","x":"structural","c":7},{"s":26,"t":0,"p":"uses","x":"structural","c":14},{"s":37,"t":1,"p":"uses","x":"structural","c":7},{"s":37,"t":2,"p":"uses","x":"structural","c":3},{"s":37,"t":4,"p":"uses","x":"structural","c":1},{"s":11,"t":1,"p":"uses","x":"structural","c":20},{"s":233,"t":0,"p":"part_of","x":"structural","c":4},{"s":234,"t":3,"p":"part_of","x":"structural","c":2},{"s":49,"t":3,"p":"part_of","x":"llm","c":3},{"s":49,"t":134,"p":"uses","x":"llm","c":1},{"s":49,"t":97,"p":"uses","x":"llm","c":1},{"s":22,"t":3,"p":"part_of","x":"llm","c":9},{"s":22,"t":132,"p":"part_of","x":"llm","c":1}], CO={"technology": "#4c9aff", "concept": "#a78bfa", "artifact": "#34d399", "project": "#fbbf24", "problem": "#f87171", "decision": "#f472b6", "person": "#94a3b8"};
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+let W=0,H=0,dpr=Math.min(devicePixelRatio||1,2);
+function resize(){const s=document.getElementById('stage');
+  W=s.clientWidth;H=s.clientHeight;cv.width=W*dpr;cv.height=H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);}
+new ResizeObserver(resize).observe(document.getElementById('stage'));resize();
+
+// ---- 3D force layout. O(n^2) at a few hundred nodes; a BVH would be more code
+// than it saves.
+const N=ND.length, adj=ND.map(()=>[]);
+LK.forEach((l,i)=>{adj[l.s].push(i);adj[l.t].push(i);});
+ND.forEach((n,i)=>{ // golden-spiral sphere: an even start beats random clumping
+  const y=N>1?1-(i/(N-1))*2:0, r=Math.sqrt(Math.max(0,1-y*y)), th=i*2.39996, R=260;
+  n.x=Math.cos(th)*r*R; n.y=y*R; n.z=Math.sin(th)*r*R;
+  n.vx=n.vy=n.vz=0; n.r=2.6+Math.sqrt(n.d)*1.6;});
+let alpha=1;
+function tick(){
+  if(alpha<0.002)return;
+  for(let i=0;i<N;i++){const a=ND[i];
+    for(let j=i+1;j<N;j++){const b=ND[j];
+      let dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z,d2=dx*dx+dy*dy+dz*dz||.01;
+      if(d2>490000)continue;
+      const f=5200/d2,d=Math.sqrt(d2),fx=dx/d*f,fy=dy/d*f,fz=dz/d*f;
+      a.vx-=fx;a.vy-=fy;a.vz-=fz;b.vx+=fx;b.vy+=fy;b.vz+=fz;}
+    a.vx-=a.x*.009;a.vy-=a.y*.009;a.vz-=a.z*.009;}
+  for(const l of LK){const a=ND[l.s],b=ND[l.t];
+    const dx=b.x-a.x,dy=b.y-a.y,dz=b.z-a.z;
+    const d=Math.sqrt(dx*dx+dy*dy+dz*dz)||.01,f=(d-150)*.008;
+    const fx=dx/d*f,fy=dy/d*f,fz=dz/d*f;
+    a.vx+=fx;a.vy+=fy;a.vz+=fz;b.vx-=fx;b.vy-=fy;b.vz-=fz;}
+  for(const n of ND){n.x+=(n.vx*=.82)*alpha;n.y+=(n.vy*=.82)*alpha;n.z+=(n.vz*=.82)*alpha;}
+  alpha*=.994;}
+for(let i=0;i<700;i++)tick();   // settle before first paint
+
+// ---- camera
+let yaw=.5,pitch=-.25,dist=1,spin=true,sel=null,hover=null,q='';
+const off=new Set();
+let cx=0,cy=0,cz=0,span=1;
+(function centre(){const xs=ND.map(n=>n.x),ys=ND.map(n=>n.y),zs=ND.map(n=>n.z);
+  cx=(Math.max(...xs)+Math.min(...xs))/2;cy=(Math.max(...ys)+Math.min(...ys))/2;
+  cz=(Math.max(...zs)+Math.min(...zs))/2;
+  span=Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys),
+                Math.max(...zs)-Math.min(...zs))||1;})();
+
+function project(n){
+  const x=n.x-cx,y=n.y-cy,z=n.z-cz;
+  const cyw=Math.cos(yaw),syw=Math.sin(yaw);
+  let X=x*cyw-z*syw, Z=x*syw+z*cyw;
+  const cp=Math.cos(pitch),sp=Math.sin(pitch);
+  let Y=y*cp-Z*sp; Z=y*sp+Z*cp;
+  const fov=Math.min(W,H)*1.15, cam=span*1.9*dist;   // dist moves the camera only
+  const k=fov/(cam+Z);
+  return [W/2+X*k, H/2+Y*k, Z, k];}
+const vis=n=>!off.has(n.k), hit=n=>q&&n.n.toLowerCase().includes(q);
+
+function fitView(){           // perspective: measure, correct, repeat
+  if(!W||!H)return;
+  for(let pass=0;pass<12;pass++){
+    let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+    for(const n of ND){const p=project(n);if(p[3]<=0)continue;
+      if(p[0]<minX)minX=p[0];if(p[0]>maxX)maxX=p[0];
+      if(p[1]<minY)minY=p[1];if(p[1]>maxY)maxY=p[1];}
+    const w=maxX-minX,h=maxY-minY;
+    if(!(w>0&&h>0))return;
+    const want=Math.min((W-110)/w,(H-110)/h);
+    if(Math.abs(want-1)<0.02)return;
+    dist=Math.max(.15,Math.min(6,dist/want));
+  }
+}
+
+let drag=false,moved=0;
+let fitted=false;
+function draw(){
+  tick();
+  if(!fitted&&W>0){fitView();fitted=true;}
+  if(spin&&!drag)yaw+=.0016;
+  ctx.clearRect(0,0,W,H);
+  const P=ND.map(project);
+
+  for(const l of LK){const a=ND[l.s],b=ND[l.t];
+    if(!vis(a)||!vis(b))continue;
+    const A=P[l.s],B=P[l.t];
+    if(A[3]<=0||B[3]<=0)continue;
+    const near=sel!==null&&(l.s===sel||l.t===sel);
+    ctx.beginPath();ctx.setLineDash(l.x==='structural'?[2,3]:[]);
+    const depth=Math.max(.06,Math.min(.5,(A[3]+B[3])));
+    ctx.strokeStyle=near?'rgba(88,166,255,.85)':'rgba(139,152,171,'+(depth*.42)+')';
+    ctx.lineWidth=near?1.7:.65;
+    ctx.moveTo(A[0],A[1]);ctx.lineTo(B[0],B[1]);ctx.stroke();}
+  ctx.setLineDash([]);
+
+  const order=ND.map((n,i)=>i).filter(i=>vis(ND[i])&&P[i][3]>0)
+                .sort((a,b)=>P[b][2]-P[a][2]);   // painter's algorithm: far first
+  const labels=[];
+  for(const i of order){const n=ND[i],x=P[i][0],y=P[i][1],k=P[i][3];
+    const r=Math.max(1.2,n.r*k*1.5);
+    const on=i===sel||i===hover||hit(n);
+    const fade=Math.max(.3,Math.min(1,k*2.4));
+    ctx.globalAlpha=(q&&!hit(n)&&!on)?.12:fade;
+    ctx.beginPath();ctx.arc(x,y,r,0,6.2832);
+    ctx.fillStyle=CO[n.k]||'#8b98ab';ctx.fill();
+    if(on){ctx.globalAlpha=1;ctx.lineWidth=2;ctx.strokeStyle='#fff';ctx.stroke();}
+    ctx.globalAlpha=1;
+    if(on||(!n.m&&n.d>=2))labels.push({n:n,x:x,y:y,r:r,on:on,k:k});}
+
+  labels.sort(function(a,b){return (b.on-a.on)||(b.k-a.k);});
+  const placed=[];
+  for(const L of labels){
+    if(q&&!hit(L.n)&&!L.on)continue;
+    const t=L.n.n.length>26?L.n.n.slice(0,25)+'…':L.n.n;
+    ctx.font=(L.on?'600 ':'')+'11px ui-sans-serif,system-ui,sans-serif';
+    const w=ctx.measureText(t).width,bx=L.x+L.r+5,by=L.y-6;
+    if(bx>W||bx+w<0||by>H||by+13<0)continue;
+    let clash=false;
+    for(const p of placed)
+      if(bx<p.x+p.w+4&&bx+w+4>p.x&&by<p.y+p.h+3&&by+16>p.y){clash=true;break;}
+    if(clash&&!L.on)continue;
+    placed.push({x:bx,y:by,w:w,h:13});
+    ctx.globalAlpha=L.on?1:Math.max(.45,Math.min(1,L.k*2.6));
+    ctx.fillStyle=L.on?'#fff':'rgba(232,238,246,.8)';
+    ctx.fillText(t,bx,L.y+3.5);ctx.globalAlpha=1;}
+  requestAnimationFrame(draw);}
+draw();
+
+function pick(mx,my){let best=null,bd=18*18;
+  const rect=cv.getBoundingClientRect();mx-=rect.left;my-=rect.top;
+  for(let i=0;i<N;i++){const n=ND[i];if(!vis(n))continue;
+    const p=project(n);if(p[3]<=0)continue;
+    const d=(p[0]-mx)*(p[0]-mx)+(p[1]-my)*(p[1]-my);
+    if(d<bd){bd=d;best=i;}}
+  return best;}
+
+cv.addEventListener('pointerdown',function(e){drag=true;moved=0;
+  cv.setPointerCapture(e.pointerId);cv.classList.add('drag');});
+cv.addEventListener('pointerup',function(e){cv.classList.remove('drag');
+  if(drag&&moved<6){sel=pick(e.clientX,e.clientY);showSel();}drag=false;});
+cv.addEventListener('pointermove',function(e){
+  if(drag){moved+=Math.abs(e.movementX)+Math.abs(e.movementY);
+    yaw+=e.movementX*.006;
+    pitch=Math.max(-1.45,Math.min(1.45,pitch+e.movementY*.006));}
+  else hover=pick(e.clientX,e.clientY);});
+cv.addEventListener('wheel',function(e){e.preventDefault();
+  dist=Math.max(.15,Math.min(6,dist*(e.deltaY<0?1/1.1:1.1)));},{passive:false});
+
+function showSel(){const b=document.getElementById('sel');
+  if(sel===null){b.innerHTML='<h2>Selection</h2><div class="hint">Click a node. '+
+    'Drag to orbit, scroll to zoom.</div>';return;}
+  const n=ND[sel];
+  const rows=adj[sel].map(function(i){return LK[i];}).map(function(l){
+    const out=l.s===sel,o=ND[out?l.t:l.s];
+    return '<div class="edge">'+(out?'':o.n+' ')+'<em>'+l.p+'</em>'+(out?' '+o.n:'')+
+      '<small>'+l.x+(l.c>1?' · '+l.c+' chunks':'')+'</small></div>';}).join('')
+    ||'<div class="hint">no edges inside this view</div>';
+  b.innerHTML='<h2>Selection</h2><div class="name">'+n.n+'</div>'+
+    '<div class="row"><span>'+n.k+'</span><span>degree '+n.d+'</span></div>'+
+    (n.m?'<div class="hint" style="margin-top:6px">name withheld — private corpus</div>':'')+
+    '<div style="margin-top:11px">'+rows+'</div>';}
+
+const kinds=Array.from(new Set(ND.map(function(n){return n.k;}))).sort();
+document.getElementById('kinds').innerHTML=kinds.map(function(k){
+  return '<div class="chip" data-k="'+k+'"><span class="dot" style="background:'+
+    CO[k]+'"></span>'+k+'</div>';}).join('');
+document.getElementById('kinds').onclick=function(e){
+  const el=e.target.closest('.chip');if(!el)return;
+  const k=el.dataset.k;
+  if(off.has(k))off.delete(k);else off.add(k);
+  el.classList.toggle('off',off.has(k));};
+document.getElementById('q').oninput=function(e){q=e.target.value.toLowerCase().trim();};
+const ab=document.getElementById('about');
+document.getElementById('read').onclick=function(){ab.classList.add('on');};
+document.getElementById('x').onclick=function(){ab.classList.remove('on');};
+addEventListener('keydown',function(e){if(e.key==='Escape')ab.classList.remove('on');});
+const sp=document.getElementById('spin');
+sp.onclick=function(){spin=!spin;sp.textContent=spin?'Pause spin':'Resume spin';};
+</script></body></html>

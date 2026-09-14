@@ -15,7 +15,9 @@ evalset_multihop.json
 __pycache__/
 *.pyc
 
-# generated graph views contain private entity names
+# generated graph views contain private entity names -- never publish these
 graph.html
 graph_anon.html
 *.html
+# except the published page, which carries only masked/public names
+!docs/index.html
