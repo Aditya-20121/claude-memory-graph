@@ -83,7 +83,11 @@ HTML = """<!doctype html>
     background:var(--bg); color:var(--fg);
     font:13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
   #wrap { display:flex; height:100%; }
-  canvas { flex:1; display:block; cursor:grab; }
+  /* canvas must not participate in flex sizing: writing canvas.width changes
+     its intrinsic size, which feeds back into flex:1 and grows it every frame */
+  #stage { flex:1 1 0; min-width:0; position:relative; }
+  canvas { position:absolute; inset:0; width:100%; height:100%;
+    display:block; cursor:grab; }
   canvas.drag { cursor:grabbing; }
   aside { width:320px; flex:none; background:var(--panel);
     border-left:1px solid var(--line); padding:16px; overflow-y:auto; }
@@ -115,7 +119,7 @@ HTML = """<!doctype html>
   button:hover { background:#30363d; }
 </style>
 <div id="wrap">
-  <canvas id="cv"></canvas>
+  <div id="stage"><canvas id="cv"></canvas></div>
   <aside>
     <h1>claude-memory-graph</h1>
     <div class="sub">__SUBTITLE__</div>
@@ -151,7 +155,7 @@ function resize() {
   cv.width = W * dpr; cv.height = H * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-new ResizeObserver(resize).observe(cv);
+new ResizeObserver(resize).observe(document.getElementById('stage'));
 resize();
 
 // ---- layout: plain O(n^2) force sim. At a few hundred nodes a quadtree
@@ -165,6 +169,7 @@ NODES.forEach((n, i) => {
   n.r = 3.2 + Math.sqrt(n.deg) * 1.7;
 });
 let alpha = 1;
+function settle(n) { for (let i = 0; i < n; i++) tick(); }
 function tick() {
   if (alpha < 0.002) return;
   for (let i = 0; i < N; i++) {
@@ -173,20 +178,20 @@ function tick() {
       const b = NODES[j];
       let dx = b.x - a.x, dy = b.y - a.y;
       let d2 = dx * dx + dy * dy || 0.01;
-      if (d2 > 250000) continue;                // ignore far pairs (>500px)
-      const f = 900 / d2, d = Math.sqrt(d2);
+      if (d2 > 490000) continue;                // ignore far pairs (>700px)
+      const f = 4000 / d2, d = Math.sqrt(d2);
       const fx = (dx / d) * f, fy = (dy / d) * f;
       a.vx -= fx; a.vy -= fy; b.vx += fx; b.vy += fy;
     }
     // gravity must outrun repulsion or flung-out nodes never return before
     // alpha cools -- at 0.0022 the layout stretched to 9864px on one axis
-    a.vx -= a.x * 0.022; a.vy -= a.y * 0.022;
+    a.vx -= a.x * 0.008; a.vy -= a.y * 0.008;
   }
   for (const l of LINKS) {
     const a = NODES[l.s], b = NODES[l.t];
     const dx = b.x - a.x, dy = b.y - a.y;
     const d = Math.sqrt(dx * dx + dy * dy) || 0.01;
-    const f = (d - 70) * 0.012;
+    const f = (d - 150) * 0.008;
     const fx = (dx / d) * f, fy = (dy / d) * f;
     a.vx += fx; a.vy += fy; b.vx -= fx; b.vy -= fy;
   }
@@ -196,8 +201,20 @@ function tick() {
   alpha *= 0.994;
 }
 
+settle(700);   // ~200ms of layout up front, so the graph opens already arranged
+
 // ---- view
 let zoom = 1, panX = 0, panY = 0, sel = null, hover = null, query = '';
+let fitted = false;
+function fit() {
+  const xs = NODES.map(n => n.x), ys = NODES.map(n => n.y);
+  const w = Math.max(...xs) - Math.min(...xs) || 1;
+  const h = Math.max(...ys) - Math.min(...ys) || 1;
+  const cx = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+  zoom = Math.min((W - 90) / w, (H - 90) / h, 2.2);
+  panX = -cx * zoom; panY = -cy * zoom;
+}
 const off = new Set();
 const toScreen = n => [n.x * zoom + panX + W / 2, n.y * zoom + panY + H / 2];
 const visible = n => !off.has(n.kind);
@@ -205,7 +222,9 @@ const matches = n => query && n.name.toLowerCase().includes(query);
 
 function draw() {
   tick();
+  if (!fitted && W > 0) { fit(); fitted = true; }
   ctx.clearRect(0, 0, W, H);
+  const labels = [];
 
   for (const l of LINKS) {
     const a = NODES[l.s], b = NODES[l.t];
@@ -231,12 +250,32 @@ function draw() {
     ctx.globalAlpha = query && !matches(n) && i !== sel ? 0.22 : 1;
     ctx.fill();
     if (on) { ctx.lineWidth = 2; ctx.strokeStyle = '#e6edf3'; ctx.stroke(); }
-    if (zoom > 0.75 && (n.deg > 3 || on)) {
-      ctx.fillStyle = on ? '#e6edf3' : 'rgba(230,237,243,.62)';
-      ctx.font = (on ? '600 ' : '') + '11px ui-sans-serif, system-ui, sans-serif';
-      ctx.fillText(n.name.slice(0, 26), x + r + 4, y + 3.5);
-    }
     ctx.globalAlpha = 1;
+    // defer labels: drawing them inline lets 300 of them overlap into mush
+    // gate on degree, not zoom: auto-fit settles near 0.8x so a zoom gate
+    // would leave the default view completely unlabelled
+    if (on || n.deg >= 5 || (zoom > 1.3 && n.deg > 2)) labels.push({ n, x, y, r, on });
+  }
+
+  // draw labels last, skipping any that would collide with one already placed
+  labels.sort((a, b) => (b.on - a.on) || (b.n.deg - a.n.deg));
+  const placed = [];
+  for (const L of labels) {
+    if (query && !matches(L.n) && !L.on) continue;
+    const text = L.n.name.length > 24 ? L.n.name.slice(0, 23) + '…' : L.n.name;
+    ctx.font = (L.on ? '600 ' : '') + '11px ui-sans-serif, system-ui, sans-serif';
+    const w = ctx.measureText(text).width;
+    const bx = L.x + L.r + 4, by = L.y - 6, bh = 13;
+    if (bx > W || bx + w < 0 || by > H || by + bh < 0) continue;
+    let hit = false;
+    for (const q of placed) {
+      if (bx < q.x + q.w + 3 && bx + w + 3 > q.x &&
+          by < q.y + q.h + 2 && by + bh + 2 > q.y) { hit = true; break; }
+    }
+    if (hit && !L.on) continue;
+    placed.push({ x: bx, y: by, w, h: bh });
+    ctx.fillStyle = L.on ? '#e6edf3' : 'rgba(230,237,243,.72)';
+    ctx.fillText(text, bx, L.y + 3.5);
   }
   requestAnimationFrame(draw);
 }
@@ -312,7 +351,7 @@ document.getElementById('kinds').onclick = e => {
 };
 document.getElementById('q').oninput = e => { query = e.target.value.toLowerCase().trim(); };
 document.getElementById('reset').onclick = () => {
-  zoom = 1; panX = panY = 0; sel = null; alpha = 1; showSel();
+  sel = null; fitted = false; showSel();
 };
 </script>
 """
