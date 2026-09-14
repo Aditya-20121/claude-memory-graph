@@ -57,6 +57,7 @@ python embed_entities.py      # entity vectors (≈25 min)
 python retrieve.py "what blocked the model eval?"           # auto mode
 python evaluate.py --ablate                              # per-set tables
 python benchmark_all.py                                  # the combined table above
+python visualize.py                                      # interactive graph -> graph.html
 ```
 
 Every module has a runnable self-check with no framework or fixtures:

@@ -14,3 +14,8 @@ evalset_multihop.json
 *.log
 __pycache__/
 *.pyc
+
+# generated graph views contain private entity names
+graph.html
+graph_anon.html
+*.html
