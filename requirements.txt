@@ -1,0 +1,3 @@
+# Pipeline and retrieval use the standard library only.
+# The MCP server is the sole third-party dependency.
+mcp>=2.0

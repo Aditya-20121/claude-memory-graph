@@ -1,0 +1,16 @@
+# secrets
+.env
+api.txt
+
+# the corpus itself: personal conversation history, never publish
+memory.db
+*.db
+
+# generated eval questions are derived from private conversations
+evalset.json
+evalset_multihop.json
+
+# run artifacts
+*.log
+__pycache__/
+*.pyc
